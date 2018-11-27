@@ -1485,6 +1485,7 @@ static int eio_policy_switch(struct cache_c *dmc, u_int32_t policy)
 {
 	int error = -EINVAL;
 	struct eio_policy *old_policy_ops;
+	u_int64_t index;
 
 	EIO_ASSERT(dmc->req_policy != policy);
 	old_policy_ops = dmc->policy_ops;
@@ -1493,21 +1494,25 @@ static int eio_policy_switch(struct cache_c *dmc, u_int32_t policy)
 	if (error)
 		goto out;
 
-	error = eio_repl_blk_init(dmc->policy_ops);
+	error = eio_policy_repl_blk_init(dmc->policy_ops);
 	if (error) {
 		error = -ENOMEM;
 		pr_err ("eio_policy_swtich: Unable to allocate memory for policy cache block");
 		goto out;
 	}
 
-	error = eio_repl_sets_init(dmc->policy_ops);
+	error = eio_policy_repl_sets_init(dmc->policy_ops);
 	if (error) {
 		error = -ENOMEM;
 		pr_err 	("eio_policy_switch: Failed to allocate memory for cache policy");
 		goto out;
 	}
 
-	eio_policy_lru_pushblks(dmc->policy_ops);
+	for (index = 0; index < (index_t)(dmc->size >> dmc->consecutive_shift); index++)
+	{
+		EIOPolicy_NotifyNew(dmc->policy_ops,index);
+	}
+
 	dmc->req_policy = policy;
 	return 0;
 

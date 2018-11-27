@@ -39,8 +39,8 @@ int eio_rand_init(struct cache_c *);
 void eio_rand_exit(void);
 int eio_rand_cache_sets_init(struct eio_policy *);
 int eio_rand_cache_blk_init(struct eio_policy *);
-void eio_rand_find_reclaim_dbn(struct eio_policy *, index_t, index_t *);
-int eio_rand_clean_set(struct eio_policy *, index_t, int);
+void EIOPolicyRAND_FindVictim(struct eio_policy *pOps, index_t Set, index_t *pIndex);
+void EIOPolicyRAND_FlushSet(struct eio_policy *pOps, index_t Set, u_int32_t u32NbMaxBlockToFlush, u_int32_t* pu32NbFlushedBlock);
 
 /* Per policy instance initialization */
 struct eio_policy *eio_rand_instance_init(void);
@@ -70,59 +70,55 @@ int eio_rand_cache_sets_init(struct eio_policy *p_ops)
 	return 0;
 }
 
-/*
- * The actual function that returns a victim block in index.
- */
-void
-eio_rand_find_reclaim_dbn(struct eio_policy *p_ops, index_t start_index,
-			  index_t *index)
+//ask the policy to find a victim block in set [set] to cache a new one, policy return the index of the cache block to evict [index] (but do not actually evict it !)		
+void EIOPolicyRAND_FindVictim(struct eio_policy *pOps, index_t Set, index_t *pIndex)
 {
 	int i = 0;
 	index_t idx;
+	struct cache_c* pDmc = pOps->sp_dmc;
+	index_t start_index ;
 
-	struct cache_c *dmc = p_ops->sp_dmc;
+	start_index= Set * pDmc->assoc;
 
 	/*
 	 * "start_index" should already be the beginning index of the set.
 	 * We're just being cautious here.
 	 */
-	start_index = (start_index / dmc->assoc) * dmc->assoc;
-	for (i = 0; i < (int)dmc->assoc; i++) {
-		idx = dmc->random++ % dmc->assoc;
-		if (EIO_CACHE_STATE_GET(dmc, start_index + idx) == VALID) {
-			*index = start_index + idx;
+	start_index = (start_index / pDmc->assoc) * pDmc->assoc;
+	for (i = 0; i < (int)pDmc->assoc; i++) {
+		idx = pDmc->random++ % pDmc->assoc;
+		if (EIO_CACHE_STATE_GET(pDmc, start_index + idx) == VALID) {
+			(*pIndex) = start_index + idx;
 			return;
 		}
 	}
+
+	return;
 }
 
-/*
- * Go through the entire set and clean.
- */
-int eio_rand_clean_set(struct eio_policy *p_ops, index_t set, int to_clean)
+//ask the policy to flush a whole set	
+void EIOPolicyRAND_FlushSet(struct eio_policy *pOps, index_t Set, u_int32_t u32NbMaxBlockToFlush, u_int32_t* pu32NbFlushedBlock)
 {
-	int i = 0, nr_writes = 0;
-	index_t start_index;
+	int i = 0;
+	struct cache_c* pDmc = pOps->sp_dmc;
+	index_t start_index ;
 
-	struct cache_c *dmc;
-
-	dmc = p_ops->sp_dmc;
-
-	start_index = set * dmc->assoc;
+	start_index= Set * pDmc->assoc;
+	(*pu32NbFlushedBlock) = 0;
 
 	/* Scan sequentially in the set and pick blocks to clean */
-	while ((i < (int)dmc->assoc) && (nr_writes < to_clean)) {
-		if ((EIO_CACHE_STATE_GET(dmc, start_index + i) &
+	while ((i < (int)pDmc->assoc) && ((*pu32NbFlushedBlock)  < u32NbMaxBlockToFlush)) {
+		if ((EIO_CACHE_STATE_GET(pDmc, start_index + i) &
 		     (DIRTY | BLOCK_IO_INPROG)) == DIRTY) {
-			EIO_CACHE_STATE_ON(dmc, start_index + i,
+			EIO_CACHE_STATE_ON(pDmc, start_index + i,
 					   DISKWRITEINPROG);
-			nr_writes++;
+			(*pu32NbFlushedBlock)++;
 		}
 		i++;
 	}
-
-	return nr_writes;
+	return;
 }
+
 
 /*
  * rand is per set, so do nothing on a per block init.
@@ -147,13 +143,19 @@ struct eio_policy *eio_rand_instance_init(void)
 
 	/* Initialize the rand specific functions and variables */
 	new_instance->sp_name = CACHE_REPL_RANDOM;
-	new_instance->sp_policy.lru = NULL;
 	new_instance->sp_repl_init = eio_rand_init;
 	new_instance->sp_repl_exit = eio_rand_exit;
 	new_instance->sp_repl_sets_init = eio_rand_cache_sets_init;
 	new_instance->sp_repl_blk_init = eio_rand_cache_blk_init;
-	new_instance->sp_find_reclaim_dbn = eio_rand_find_reclaim_dbn;
-	new_instance->sp_clean_set = eio_rand_clean_set;
+
+
+	new_instance->pfNotifyHit		= NULL;
+	new_instance->pfNotifyMiss		= NULL;	
+	new_instance->pfNotifyNew		= NULL;
+	new_instance->pfNotifyDelete		= NULL;
+	new_instance->pfFindVictim		= EIOPolicyRAND_FindVictim;
+	new_instance->pfFlushSet		= EIOPolicyRAND_FlushSet;
+
 	new_instance->sp_dmc = NULL;
 
 	try_module_get(THIS_MODULE);
@@ -176,7 +178,7 @@ int __init rand_register(void)
 {
 	int ret;
 
-	ret = eio_register_policy(&eio_rand_ops);
+	ret = eio_policy_register(&eio_rand_ops);
 	if (ret != 0)
 		pr_info("eio_rand already registered");
 
@@ -188,7 +190,7 @@ void __exit rand_unregister(void)
 {
 	int ret;
 
-	ret = eio_unregister_policy(&eio_rand_ops);
+	ret = eio_policy_unregister(&eio_rand_ops);
 	if (ret != 0)
 		pr_err("eio_rand unregister failed");
 }

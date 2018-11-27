@@ -723,7 +723,7 @@ static int eio_md_create(struct cache_c *dmc, int force, int cold)
 			goto free_header;
 		}
 	}
-	if (eio_repl_blk_init(dmc->policy_ops) != 0) {
+	if (eio_policy_repl_blk_init(dmc->policy_ops) != 0) {
 		pr_err
 			("md_create: Unable to allocate memory for policy cache block for cache \"%s\".\n",
 			dmc->cache_name);
@@ -1182,7 +1182,7 @@ static int eio_md_load(struct cache_c *dmc)
 		return 1;
 	}
 
-	if (eio_repl_blk_init(dmc->policy_ops) != 0) {
+	if (eio_policy_repl_blk_init(dmc->policy_ops) != 0) {
 		vfree((void *)EIO_CACHE(dmc));
 		pr_err
 			("md_load: Unable to allocate memory for policy cache block");
@@ -1466,6 +1466,7 @@ int eio_cache_create(struct cache_rec_short *cache)
 	u_int64_t i;
 	index_t prev_set;
 	index_t cur_set;
+	index_t index;
 	sector_t order;
 	int error = -EINVAL;
 	uint32_t persistence = 0;
@@ -1684,16 +1685,22 @@ int eio_cache_create(struct cache_rec_short *cache)
 	cache->cr_src_sector_size = LOG_BLK_SIZE(dmc->disk_dev->bdev);
 	cache->cr_ssd_sector_size = LOG_BLK_SIZE(dmc->cache_dev->bdev);
 
-	if (cache->cr_blksize) {
+	if (cache->cr_blksize) 
+	{
 		dmc->block_size = cache->cr_blksize >> SECTOR_SHIFT;
-		if (dmc->block_size & (dmc->block_size - 1)) {
+		if (dmc->block_size & (dmc->block_size - 1)) 
+		{
 			strerr = "Invalid block size";
 			error = -EINVAL;
 			goto bad5;
 		}
 		if (dmc->block_size == 0)
+		{
 			dmc->block_size = DEFAULT_CACHE_BLKSIZE;
-	} else {
+		}
+	}
+	else 
+	{
 		dmc->block_size = DEFAULT_CACHE_BLKSIZE;
 	}
 	dmc->block_shift = ffs(dmc->block_size) - 1;
@@ -1711,18 +1718,24 @@ int eio_cache_create(struct cache_rec_short *cache)
 
 	dmc->cache_size = dmc->size;
 
-	if (cache->cr_assoc) {
+	if (cache->cr_assoc) 
+	{
 		dmc->assoc = cache->cr_assoc;
-		if ((dmc->assoc & (dmc->assoc - 1)) ||
-		    dmc->assoc > EIO_MAX_ASSOC || dmc->size < dmc->assoc) {
+		if ((dmc->assoc & (dmc->assoc - 1)) ||   dmc->assoc > EIO_MAX_ASSOC || dmc->size < dmc->assoc) 
+		{
 			strerr = "Invalid cache associativity";
 			error = -EINVAL;
 			goto bad5;
 		}
 		if (dmc->assoc == 0)
+		{
 			dmc->assoc = DEFAULT_CACHE_ASSOC;
-	} else
+		}
+	} 
+	else
+	{
 		dmc->assoc = DEFAULT_CACHE_ASSOC;
+	}
 
 	/*
 	 * initialize to an invalid index
@@ -1796,14 +1809,17 @@ init:
 		dmc->cache_sets[i].mdreq = NULL;
 		dmc->cache_sets[i].flags = 0;
 	}
-	error = eio_repl_sets_init(dmc->policy_ops);
+	error = eio_policy_repl_sets_init(dmc->policy_ops);
 	if (error < 0) {
 		strerr = "Failed to allocate memory for cache policy";
 		vfree((void *)dmc->cache_sets);
 		vfree((void *)EIO_CACHE(dmc));
 		goto bad5;
 	}
-	eio_policy_lru_pushblks(dmc->policy_ops);
+	for (index = 0; index < (index_t)(dmc->size >> dmc->consecutive_shift); index++)
+	{
+		EIOPolicy_NotifyNew(dmc->policy_ops,index);
+	}
 
 	if (dmc->mode == CACHE_MODE_WB) {
 		error = eio_allocate_wb_resources(dmc);
@@ -2099,6 +2115,7 @@ out:
  */
 int eio_ctr_ssd_add(struct cache_c *dmc, char *dev)
 {
+	index_t i;
 	int r = 0;
 	struct eio_bdev *prev_cache_dev;
 	u_int32_t prev_persistence = dmc->persistence;
@@ -2169,13 +2186,18 @@ int eio_ctr_ssd_add(struct cache_c *dmc, char *dev)
 		goto out;
 	}
 
-	r = eio_repl_sets_init(dmc->policy_ops);
+	r = eio_policy_repl_sets_init(dmc->policy_ops);
 	if (r < 0) {
 		pr_err
 			("ctr_ssd_add: Failed to allocate memory for cache policy");
 		goto out;
 	}
-	eio_policy_lru_pushblks(dmc->policy_ops);
+
+	for (i = 0; i < (index_t)(dmc->size >> dmc->consecutive_shift); i++)
+	{
+		EIOPolicy_NotifyNew(dmc->policy_ops,i);
+	}
+
 	if (dmc->mode != CACHE_MODE_WB)
 		/* Cold cache will reset the stats */
 		memset(&dmc->eio_stats, 0, sizeof(dmc->eio_stats));

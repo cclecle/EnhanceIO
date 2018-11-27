@@ -991,48 +991,43 @@ static u_int32_t hash_block(struct cache_c *dmc, sector_t dbn)
 
 static void
 find_valid_dbn(struct cache_c *dmc, sector_t dbn,
-	       index_t start_index, index_t *index)
+	       index_t start_index, index_t *index) 
 {
 	index_t i;
 	index_t end_index = start_index + dmc->assoc;
 
-	for (i = start_index; i < end_index; i++) {
-		if ((EIO_CACHE_STATE_GET(dmc, i) & VALID)
-		    && EIO_DBN_GET(dmc, i) == dbn) {
+	for (i = start_index; i < end_index; i++) 
+	{
+		if ((EIO_CACHE_STATE_GET(dmc, i) & VALID) && EIO_DBN_GET(dmc, i) == dbn) //CACHE HIT ACTION ??
+		{
 			*index = i;
-			if ((EIO_CACHE_STATE_GET(dmc, i) & BLOCK_IO_INPROG) ==
-			    0)
-				eio_policy_reclaim_lru_movetail(dmc, i,
-								dmc->
-								policy_ops);
+			/*
+			if ((EIO_CACHE_STATE_GET(dmc, i) & BLOCK_IO_INPROG) == 0)
+			{
+				//io_policy_dbn_hit_notify(dmc->policy_ops, i);
+				//eio_policy_reclaim_lru_movetail(dmc, i,	dmc->policy_ops); 
+			}*/
 			return;
 		}
 	}
 	*index = -1;
 }
 
-static index_t find_invalid_dbn(struct cache_c *dmc, index_t start_index)
+static index_t find_invalid_dbn(struct cache_c *dmc, index_t start_index) 
 {
 	index_t i;
 	index_t end_index = start_index + dmc->assoc;
 
 	/* Find INVALID slot that we can reuse */
 	for (i = start_index; i < end_index; i++) {
-		if (EIO_CACHE_STATE_GET(dmc, i) == INVALID) {
-			eio_policy_reclaim_lru_movetail(dmc, i,
-							dmc->policy_ops);
+		if (EIO_CACHE_STATE_GET(dmc, i) == INVALID) //CACHE MISS ACTION ??
+		{
 			return i;
 		}
 	}
 	return -1;
 }
 
-/* Search for a slot that we can reclaim */
-static void
-find_reclaim_dbn(struct cache_c *dmc, index_t start_index, index_t *index)
-{
-	eio_find_reclaim_dbn(dmc->policy_ops, start_index, index);
-}
 
 void eio_set_warm_boot(void)
 {
@@ -1048,32 +1043,48 @@ eio_lookup(struct cache_c *dmc, struct eio_bio *ebio, index_t *index)
 {
 	sector_t dbn = EIO_ROUND_SECTOR(dmc, ebio->eb_sector);
 	u_int32_t set_number;
-	index_t invalid, oldest_clean = -1;
+	index_t InvalidIndex;
 	index_t start_index;
+	index_t ReclaimedIndex = -1;
 
 	/*ASK it is assumed that the lookup is being done for a single block*/
 	set_number = hash_block(dmc, dbn);
 	start_index = dmc->assoc * set_number;
 	find_valid_dbn(dmc, dbn, start_index, index);
 	if (*index >= 0)
+	{
+		if((EIO_CACHE_STATE_GET(dmc, *index ) & BLOCK_IO_INPROG) ==	0)
+		{
+			EIOPolicy_NotifyHit(dmc->policy_ops, *index);
+		}
 		/* We found the exact range of blocks we are looking for */
 		return VALID;
-
-	invalid = find_invalid_dbn(dmc, start_index);
-	if (invalid == -1)
-		/* We didn't find an invalid entry, search for oldest valid entry */
-		find_reclaim_dbn(dmc, start_index, &oldest_clean);
+	}
+	EIOPolicy_NotifyMiss(dmc->policy_ops, dbn);
+	//cache entry not found, looking for an invalid
+	InvalidIndex = find_invalid_dbn(dmc, start_index);
+	if (InvalidIndex == -1)
+	{
+		/* We didn't find an invalid entry, looking for a victim*/
+		EIOPolicy_FindVictim(dmc->policy_ops,set_number, &ReclaimedIndex);
+		EIOPolicy_NotifyDelete(dmc->policy_ops,ReclaimedIndex);
+		EIOPolicy_NotifyNew(dmc->policy_ops,ReclaimedIndex);
+	}
+	else
+	{
+		EIOPolicy_NotifyNew(dmc->policy_ops,InvalidIndex);
+	}
 	/*
 	 * Cache miss :
 	 * We can't choose an entry marked INPROG, but choose the oldest
 	 * INVALID or the oldest VALID entry.
 	 */
 	*index = start_index + dmc->assoc;
-	if (invalid != -1) {
-		*index = invalid;
+	if (InvalidIndex != -1) {
+		*index = InvalidIndex;
 		return INVALID;
-	} else if (oldest_clean != -1) {
-		*index = oldest_clean;
+	} else if (ReclaimedIndex != -1) {
+		*index = ReclaimedIndex;
 		return VALID;
 	}
 	return -1;
@@ -2655,6 +2666,8 @@ static int eio_read_peek(struct cache_c *dmc, struct eio_bio *ebio)
 			EIO_DBN_SET(dmc, index, (sector_t)ebio->eb_sector);
 			ebio->eb_index = index;
 			ebio->eb_bc->bc_dir = UNCACHED_READ_AND_READFILL;
+
+
 		}
 		goto out;
 	}
@@ -2675,6 +2688,7 @@ static int eio_read_peek(struct cache_c *dmc, struct eio_bio *ebio)
 		EIO_DBN_SET(dmc, index, (sector_t)ebio->eb_sector);
 		ebio->eb_index = index;
 		ebio->eb_bc->bc_dir = UNCACHED_READ_AND_READFILL;
+
 	}
 
 out:
@@ -2768,13 +2782,16 @@ static int eio_write_peek(struct cache_c *dmc, struct eio_bio *ebio)
 	EIO_ASSERT(!(EIO_CACHE_STATE_GET(dmc, index) & DIRTY));
 	if (eio_to_sector(ebio->eb_size) == dmc->block_size) {
 		if (res == VALID)
+		{
 			atomic64_inc(&dmc->eio_stats.wr_replace);
+		}
 		else
 			atomic64_inc(&dmc->eio_stats.cached_blocks);
 		EIO_CACHE_STATE_SET(dmc, index, VALID | CACHEWRITEINPROG);
 		EIO_DBN_SET(dmc, index, (sector_t)ebio->eb_sector);
 		ebio->eb_index = index;
 		retval = 1;
+
 	} else {
 		/*
 		 * eb iosize smaller than cache block size shouldn't
@@ -3029,9 +3046,11 @@ eio_get_setblks_to_clean(struct cache_c *dmc, index_t set, int *ncleans)
 			}
 			i++;
 		}
-	} else
-		nr_writes =
-			eio_policy_clean_set(dmc->policy_ops, set, max_clean);
+	} 
+	else
+	{
+		EIOPolicy_FlushSet(dmc->policy_ops, set, max_clean,&nr_writes);
+	}
 
 	*ncleans = nr_writes;
 }

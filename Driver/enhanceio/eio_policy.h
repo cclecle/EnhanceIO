@@ -40,42 +40,41 @@
  * XXX - The above comment is from the original code. Looks like an error,
  * maximum associativity should be 32K (2^15) and not 8K.
  */
-#define EIO_MAX_ASSOC   8192
-#define EIO_LRU_NULL    0xFFFF
+#define EIO_MAX_ASSOC   32768 	//TODO: check, was 8192
 
 /* Declerations to keep the compiler happy */
 struct cache_c;
 struct eio_policy;
-struct eio_lru;
-
-/* LRU specific data structures and functions */
-struct eio_lru {
-	void (*sl_lru_pushblks)(struct eio_policy *);
-	void (*sl_reclaim_lru_movetail)(struct cache_c *, index_t,
-					struct eio_policy *);
-};
-
-/* Function prototypes for LRU wrappers in eio_policy.c */
-void eio_policy_lru_pushblks(struct eio_policy *);
-void eio_policy_reclaim_lru_movetail(struct cache_c *, index_t,
-				     struct eio_policy *);
 
 /*
  * Context that captures the cache block replacement policy.
  * There is one instance of this struct per dmc (cache)
  */
 struct eio_policy {
-	int sp_name;
-	union {
-		struct eio_lru *lru;
-	} sp_policy;
-	int (*sp_repl_init)(struct cache_c *);
-	void (*sp_repl_exit)(void);
-	int (*sp_repl_sets_init)(struct eio_policy *);
-	int (*sp_repl_blk_init)(struct eio_policy *);
-	void (*sp_find_reclaim_dbn)(struct eio_policy *,
-				    index_t start_index, index_t *index);
-	int (*sp_clean_set)(struct eio_policy *, index_t set, int);
+	int 	sp_name;
+	int 	(*sp_repl_init)		(struct cache_c *);
+	void 	(*sp_repl_exit)		(void);
+	int 	(*sp_repl_sets_init)	(struct eio_policy *);
+	int 	(*sp_repl_blk_init)	(struct eio_policy *);
+	//TODO: add policy context backup management
+/*
+The following set of command is the interface between the cache manager and the policies.
+Policies must not operate direclty on cache data nor cache sets but should receive notification to update their internal
+context data and then make the decisions of wich block to evict.
+*/
+	//notify to the policy a cache block hit at index [index]
+	void 	(*pfNotifyHit)		(struct eio_policy *pOps, index_t Index);	
+	//notify to the policy a cache block miss at sector [dbn]
+	void 	(*pfNotifyMiss)		(struct eio_policy *pOps, sector_t Dbn );
+	//notify the addition of a new valid cache block at [index]		
+	void 	(*pfNotifyNew)		(struct eio_policy *pOps, index_t Index);	
+	//notify the removal of a cache block at [index]		
+	void 	(*pfNotifyDelete)	(struct eio_policy *pOps, index_t Index);
+	//ask the policy to find a victim block in set [set] to cache a new one, policy return the index of the cache block to evict [index] (but do not actually evict it !)		
+	void 	(*pfFindVictim)		(struct eio_policy *pOps, index_t Set, index_t *pIndex);
+	//ask the policy to flush a whole set	
+	void 	(*pfFlushSet)		(struct eio_policy *pOps, index_t Set, u_int32_t u32NbMaxBlockToFlush,u_int32_t* pu32NbFlushedBlock);
+
 	struct cache_c *sp_dmc;
 };
 
@@ -90,15 +89,25 @@ struct eio_policy_header {
 };
 
 /* Prototypes of generic functions in eio_policy */
-int *eio_repl_init(struct cache_c *);
-int eio_repl_sets_init(struct eio_policy *);
-int eio_repl_blk_init(struct eio_policy *);
-void eio_find_reclaim_dbn(struct eio_policy *, index_t start_index,
-			  index_t *index);
-int eio_policy_clean_set(struct eio_policy *, index_t, int);
+int *eio_policy_repl_init(struct cache_c *);
+int eio_policy_repl_sets_init(struct eio_policy *);
+int eio_policy_repl_blk_init(struct eio_policy *);
 
-int eio_register_policy(struct eio_policy_header *);
-int eio_unregister_policy(struct eio_policy_header *);
+//notify to the policy a cache block hit at index [index]
+void EIOPolicy_NotifyHit(struct eio_policy *pOps, index_t Index);	
+//notify to the policy a cache block miss at sector [dbn]
+void EIOPolicy_NotifyMiss(struct eio_policy *pOps, sector_t Dbn );
+//notify the addition of a new valid cache block at [index]		
+void EIOPolicy_NotifyNew(struct eio_policy *pOps, index_t Index);	
+//notify the removal of a cache block at [index]		
+void EIOPolicy_NotifyDelete(struct eio_policy *pOps, index_t Index);
+//ask the policy to find a victim block in set [set] to cache a new one, policy return the index of the cache block to evict [index] (but do not actually evict it !)		
+void EIOPolicy_FindVictim(struct eio_policy *pOps, index_t Set, index_t *pIndex);
+//ask the policy to flush a whole set	
+void EIOPolicy_FlushSet(struct eio_policy *pOps, index_t Set, u_int32_t u32NbMaxBlockToFlush, u_int32_t* pu32NbFlushedBlock);
+
+int eio_policy_register(struct eio_policy_header *);
+int eio_policy_unregister(struct eio_policy_header *);
 struct eio_policy *eio_get_policy(int);
 void eio_put_policy(struct eio_policy *);
 

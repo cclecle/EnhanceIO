@@ -380,6 +380,7 @@ struct flash_cacheblock {
 #define CACHE_REPL_FIFO         1
 #define CACHE_REPL_LRU          2
 #define CACHE_REPL_RANDOM       3
+#define CACHE_REPL_ADAPTIVE	4
 #define CACHE_REPL_FIRST        CACHE_REPL_FIFO
 #define CACHE_REPL_LAST         CACHE_REPL_RANDOM
 #define CACHE_REPL_DEFAULT      CACHE_REPL_FIFO
@@ -391,9 +392,10 @@ struct eio_policy_and_name {
 
 
 static const struct eio_policy_and_name eio_policy_names[] = {
-	{ CACHE_REPL_FIFO,   "fifo" },
-	{ CACHE_REPL_LRU,    "lru"  },
-	{ CACHE_REPL_RANDOM, "rand" },
+	{ CACHE_REPL_FIFO,   	"fifo" },
+	{ CACHE_REPL_LRU,    	"lru"  },
+	{ CACHE_REPL_RANDOM, 	"rand" },
+	{ CACHE_REPL_ADAPTIVE, 	"adaptive" },
 };
 
 
@@ -965,10 +967,6 @@ void eio_clean_all(struct cache_c *dmc);
 void eio_clean_for_reboot(struct cache_c *dmc);
 void eio_clean_aged_sets(struct work_struct *work);
 void eio_comply_dirty_thresholds(struct cache_c *dmc, index_t set);
-#ifndef SSDCACHE
-void eio_reclaim_lru_movetail(struct cache_c *dmc, index_t index,
-			      struct eio_policy *);
-#endif                          /* !SSDCACHE */
 int eio_io_sync_vm(struct cache_c *dmc, struct eio_io_region *where, unsigned op,
 		   unsigned op_flags, struct bio_vec *bvec, int nbvec);
 int eio_io_sync_pages(struct cache_c *dmc, struct eio_io_region *where, unsigned op,
